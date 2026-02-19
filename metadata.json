@@ -1,0 +1,7 @@
+{
+  "name": "Nova - AI News Agent",
+  "description": "A high-fidelity conversational news anchor powered by Gemini 2.5 Native Audio Live API. Talk to Nova about current events and get real-time audio responses.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
