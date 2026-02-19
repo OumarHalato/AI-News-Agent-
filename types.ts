@@ -23,6 +23,8 @@ export type Category = 'All' | 'Political' | 'Economical' | 'Social' | 'Recommen
 
 export type SpeechRate = 'slow' | 'normal' | 'fast';
 
+export type Language = 'English' | 'Amharic' | 'Afaan Oromo' | 'Tigrinya' | 'Somali' | 'Afar' | 'French';
+
 export interface AudioVisualizerProps {
   isActive: boolean;
   analyzer?: AnalyserNode;

@@ -1,7 +1,7 @@
 
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { GoogleGenAI, Modality, LiveServerMessage, Type } from '@google/genai';
-import { ConnectionStatus, Message, Category, SpeechRate, User } from './types';
+import { ConnectionStatus, Message, Category, SpeechRate, User, Language } from './types';
 import { decode, decodeAudioData, createBlob } from './utils/audioUtils';
 import AudioVisualizer from './components/AudioVisualizer';
 import NewsCard, { DisseminationStatus } from './components/NewsCard';
@@ -15,6 +15,7 @@ interface SavedArticle {
   url: string;
   platform?: any;
   metrics?: any;
+  groundingSources?: { title: string; uri: string }[];
 }
 
 interface PostedArticle extends SavedArticle {
@@ -30,31 +31,66 @@ interface UserInterests {
   [key: string]: number;
 }
 
-const VIDEO_LOADING_MESSAGES = [
-  "Nova AI is synthesizing broadcast feeds...",
-  "Analyzing global news patterns...",
-  "Synthesizing high-fidelity cinematic summary...",
-  "Encoding semantic visual data...",
-  "Nova preparing your cinematic briefing...",
-  "Calibrating visual news engine..."
+const LANGUAGES: Language[] = ['English', 'Amharic', 'Afaan Oromo', 'Tigrinya', 'Somali', 'Afar', 'French'];
+
+const SOCIAL_CHANNELS = [
+  {
+    id: 'fb',
+    name: 'Nova Facebook Page',
+    platform: 'Facebook',
+    description: 'Join our high-fidelity community for daily news updates and live discussions.',
+    link: 'https://facebook.com/nova_networks_official',
+    icon: (
+      <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24"><path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/></svg>
+    ),
+    color: 'from-blue-600 to-blue-900',
+    glow: 'shadow-blue-500/20'
+  },
+  {
+    id: 'yt',
+    name: 'Nova YouTube Channel',
+    platform: 'YouTube',
+    description: 'Watch cinematic daily briefings and exclusive AI-generated global documentaries.',
+    link: 'https://youtube.com/@nova_networks',
+    icon: (
+      <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg>
+    ),
+    color: 'from-red-600 to-red-900',
+    glow: 'shadow-red-500/20'
+  },
+  {
+    id: 'tg',
+    name: 'Nova Telegram Channel',
+    platform: 'Telegram',
+    description: 'Get instant notifications and participate in global news polls and analytics.',
+    link: 'https://t.me/nova_networks_official',
+    icon: (
+      <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24"><path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.762 5.319-1.083 7.029-.137.724-.403.967-.658.99-.554.051-1.002-.367-1.538-.72-.84-.551-1.314-.892-2.129-1.428-1.06-.7-1.353-1.12-.48-1.921.229-.21 4.197-3.844 4.274-4.17.01-.043.01-.203-.085-.285-.094-.084-.233-.056-.333-.033-.142.033-2.42 1.541-6.828 4.517-.645.443-1.23.66-1.753.647-.577-.014-1.686-.328-2.511-.597-1.012-.331-1.817-.506-1.747-.852a.66.66 0 0 1 .251-.444c.407-.267 1.45-.82 3.033-1.5 1.583-.68 3.51-1.517 5.782-2.511.933-.404 1.706-.578 2.304-.575z"/></svg>
+    ),
+    color: 'from-sky-500 to-sky-800',
+    glow: 'shadow-sky-500/20'
+  }
 ];
 
 const getSystemInstruction = (
   category: Category, 
   speechRate: SpeechRate, 
-  topInterests: string[], 
-  recentKeywords: string[],
+  language: Language,
   user?: User
 ) => {
-  const nameFragment = user?.isLoggedIn ? `The user's name is ${user.username}. Address them occasionally in your broadcast.` : "";
-  
   return `
-ROLE: You are 'Nova', a world-class AI News Anchor for Nova Networks.
-TONE: Authoritative, charismatic, warm, and highly professional.
-CURRENT CHANNEL: ${category === 'All' ? 'Global Feed' : category + ' Desk'}.
-${nameFragment}
+ROLE: You are 'Nova', a high-fidelity, multilingual AI News Agent for Nova Networks.
+MISSION: Provide accurate, real-time news updates and professional translations.
+PRIMARY LANGUAGE: ${language}.
+CURRENT CHANNEL: ${category}.
 
-MISSION: Provide a high-fidelity, conversational news experience across Web, Facebook, Telegram, and YouTube.
+CAPABILITIES:
+1. Intelligent Search: Retrieve recent, relevant info and summarize top 3 points.
+2. Translation: High-quality translations for Amharic, Afaan Oromo, Tigrinya, Somali, Afar, and International languages.
+3. Tone: Cyberpunk, sleek, authoritative, yet accessible. Professional news anchor style.
+
+INSTRUCTION: ${user?.isLoggedIn ? `Address the user as ${user.username}.` : ""}
+If a user provides a topic, summarize the top 3 news points. Always offer to translate the summary into local Ethiopian languages if not already requested.
 `;
 };
 
@@ -62,107 +98,47 @@ const CATEGORIES: { id: Category; label: string; icon: string; color: string }[]
   { id: 'Recommended', label: 'For You', icon: '✨', color: 'bg-gradient-to-r from-blue-600 to-indigo-600' },
   { id: 'Feed', label: 'My Feed', icon: '📢', color: 'bg-indigo-700' },
   { id: 'SocialMedia', label: 'Channels', icon: '📱', color: 'bg-purple-700' },
-  { id: 'All', label: 'All News', icon: '🌍', color: 'bg-slate-700' },
-  { id: 'Political', label: 'Political', icon: '🏛️', color: 'bg-purple-600' },
-  { id: 'Economical', label: 'Economical', icon: '📉', color: 'bg-emerald-600' },
+  { id: 'All', label: 'Global', icon: '🌍', color: 'bg-slate-700' },
 ];
 
 const INITIAL_NEWS = [
-  { date: '2025-05-20T10:00:00Z', category: 'Political', source: 'BBC News', title: 'Global Summits Address New Diplomatic Challenges in 2025', image: 'https://picsum.photos/400/225?random=11', url: 'https://nova.ai/news/political/summit-2025', tags: ['Diplomacy', 'Summit2025'], sentiment: 'Neutral', platform: 'web' as const },
-  { date: '2025-05-21T09:15:00Z', category: 'SocialMedia', source: 'Telegram Global', title: 'Massive Tech Adoption in Emerging Markets: A Live Discussion', image: 'https://picsum.photos/400/225?random=44', url: 'https://t.me/nova_global', tags: ['Tech', 'Emerging'], sentiment: 'Positive', platform: 'telegram' as const, metrics: { views: '1.2M', shares: '45K' } },
-  { date: '2025-05-21T12:00:00Z', category: 'SocialMedia', source: 'YouTube Trends', title: 'Why 2025 is the Year of AI Creativity - Exclusive Interview', image: 'https://picsum.photos/400/225?random=55', url: 'https://youtube.com/nova_ai', tags: ['AI', 'Creativity'], sentiment: 'Positive', platform: 'youtube' as const, metrics: { views: '8.4M', shares: '120K' } },
-  { date: '2025-05-20T15:30:00Z', category: 'SocialMedia', source: 'Facebook News', title: 'Community Projects: Rebuilding Urban Spaces with Solar Tech', image: 'https://picsum.photos/400/225?random=66', url: 'https://fb.com/nova_news', tags: ['Community', 'Solar'], sentiment: 'Positive', platform: 'facebook' as const, metrics: { views: '500K', shares: '12K' } },
+  { date: '2025-05-20T10:00:00Z', category: 'Political', source: 'Nova Global', title: 'Global Tech Summits Address AI Sovereignty in East Africa', image: 'https://picsum.photos/400/225?random=11', url: 'https://nova.ai/news/africa/tech-summit', tags: ['Tech', 'EastAfrica'], sentiment: 'Neutral', platform: 'web' as const },
 ];
-
-const SOURCES = ['BBC News', 'The Economist', 'Reuters', 'Bloomberg', 'The Guardian', 'Telegram Global', 'YouTube Trends', 'Facebook News'];
 
 const App: React.FC = () => {
   const [status, setStatus] = useState<ConnectionStatus>(ConnectionStatus.DISCONNECTED);
   const [history, setHistory] = useState<Message[]>([]);
   const [isListening, setIsListening] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState<Category>('Recommended');
+  const [selectedLanguage, setSelectedLanguage] = useState<Language>('English');
   const [speechRate, setSpeechRate] = useState<SpeechRate>('normal');
-  const [isNewsLoading, setIsNewsLoading] = useState(false);
   const [newsArticles, setNewsArticles] = useState(INITIAL_NEWS);
   const [savedArticles, setSavedArticles] = useState<SavedArticle[]>([]);
   const [postedArticles, setPostedArticles] = useState<PostedArticle[]>([]);
-  const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc');
-  const [userInterests, setUserInterests] = useState<UserInterests>({});
-  
-  // Auth State
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
-
-  const [availableMicrophones, setAvailableMicrophones] = useState<MediaDeviceInfo[]>([]);
-  const [selectedMicrophoneId, setSelectedMicrophoneId] = useState<string>('');
-  const [inputSensitivity, setInputSensitivity] = useState<number>(30);
-  const [inputLevel, setInputLevel] = useState<number>(0);
-  const [showSettings, setShowSettings] = useState(false);
+  const [showLangMenu, setShowLangMenu] = useState(false);
 
   const [summarizingArticleIds, setSummarizingArticleIds] = useState<Set<string>>(new Set());
   const [articleSummaries, setArticleSummaries] = useState<Record<string, string>>({});
-  const [articleTags, setArticleTags] = useState<Record<string, string[]>>({});
-  const [articleSentiments, setArticleSentiments] = useState<Record<string, string>>({});
+  const [articleGrounding, setArticleGrounding] = useState<Record<string, any[]>>({});
 
   const [streamingUserText, setStreamingUserText] = useState('');
   const [streamingModelText, setStreamingModelText] = useState('');
-
-  const [generatingVideoId, setGeneratingVideoId] = useState<string | null>(null);
-  const [articleVideos, setArticleVideos] = useState<Record<string, string>>({});
-  const [activeVideo, setActiveVideo] = useState<{url: string, title: string} | null>(null);
-  const [videoLoadingMessageIdx, setVideoLoadingMessageIdx] = useState(0);
 
   const inputAudioContextRef = useRef<AudioContext | null>(null);
   const outputAudioContextRef = useRef<AudioContext | null>(null);
   const nextStartTimeRef = useRef<number>(0);
   const activeSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
-  const analyzerRef = useRef<AnalyserNode | null>(null);
   const sessionRef = useRef<any>(null);
-  const historyEndRef = useRef<HTMLDivElement>(null);
   const currentInputTranscription = useRef('');
   const currentOutputTranscription = useRef('');
 
   useEffect(() => {
-    const saved = localStorage.getItem('nova_saved_articles');
-    if (saved) try { setSavedArticles(JSON.parse(saved)); } catch (e) {}
-    const posted = localStorage.getItem('nova_posted_articles');
-    if (posted) try { setPostedArticles(JSON.parse(posted)); } catch (e) {}
-    const interests = localStorage.getItem('nova_user_interests');
-    if (interests) try { setUserInterests(JSON.parse(interests)); } catch (e) {}
-    
     const user = localStorage.getItem('nova_current_user');
     if (user) try { setCurrentUser(JSON.parse(user)); } catch (e) {}
   }, []);
-
-  useEffect(() => {
-    localStorage.setItem('nova_saved_articles', JSON.stringify(savedArticles));
-    localStorage.setItem('nova_posted_articles', JSON.stringify(postedArticles));
-    localStorage.setItem('nova_user_interests', JSON.stringify(userInterests));
-    if (currentUser) {
-      localStorage.setItem('nova_current_user', JSON.stringify(currentUser));
-    } else {
-      localStorage.removeItem('nova_current_user');
-    }
-  }, [savedArticles, postedArticles, userInterests, currentUser]);
-
-  const trackInteraction = useCallback((category: string, weight: number = 1) => {
-    setUserInterests(prev => ({ ...prev, [category]: ((prev[category] as number) || 0) + weight }));
-  }, []);
-
-  const topInterests = useMemo(() => Object.entries(userInterests).sort(([, a], [, b]) => (b as number) - (a as number)).slice(0, 2).map(([cat]) => cat), [userInterests]);
-  const recentKeywords = useMemo(() => history.filter(m => m.role === 'user').slice(-5).map(m => m.text).join(' ').toLowerCase().match(/\b(\w+)\b/g)?.slice(0, 8) || [], [history]);
-
-  const fetchLatestNews = useCallback(async () => {
-    setIsNewsLoading(true);
-    await new Promise(resolve => setTimeout(resolve, 1500));
-    const newArticles = [
-      { date: new Date().toISOString(), category: 'SocialMedia' as Category, source: 'Nova Channels', title: `Flash Update: ${['New AI Milestone', 'Global Crypto Shift', 'Sustainable Future Hub'][Math.floor(Math.random() * 3)]}`, image: `https://picsum.photos/400/225?random=${Math.floor(Math.random() * 100)}`, url: 'https://nova.ai/social', tags: ['Live', 'Nova'], sentiment: 'Positive', platform: 'telegram' as const, metrics: { views: '10K', shares: '200' } },
-      ...newsArticles
-    ].slice(0, 12);
-    setNewsArticles(newArticles);
-    setIsNewsLoading(false);
-  }, [newsArticles]);
 
   const stopAllAudio = useCallback(() => {
     activeSourcesRef.current.forEach(source => { try { source.stop(); } catch (e) {} });
@@ -179,14 +155,13 @@ const App: React.FC = () => {
       setStreamingUserText(currentInputTranscription.current);
     }
     
-    if (message.serverContent?.interrupted) {
-      stopAllAudio();
-    }
+    if (message.serverContent?.interrupted) stopAllAudio();
 
     if (message.serverContent?.turnComplete) {
       setHistory(prev => [...prev, { role: 'user', text: currentInputTranscription.current, timestamp: Date.now() }, { role: 'model', text: currentOutputTranscription.current, timestamp: Date.now() }]);
       currentInputTranscription.current = ''; currentOutputTranscription.current = ''; setStreamingUserText(''); setStreamingModelText('');
     }
+
     const base64Audio = message.serverContent?.modelTurn?.parts[0]?.inlineData?.data;
     if (base64Audio && outputAudioContextRef.current) {
       const ctx = outputAudioContextRef.current;
@@ -226,21 +201,18 @@ const App: React.FC = () => {
             source.connect(scriptProcessor); scriptProcessor.connect(inputAudioContextRef.current!.destination);
           },
           onmessage: handleLiveMessage,
-          onerror: (e) => {
-            console.error('Live API Session Error:', e);
-            setStatus(ConnectionStatus.ERROR);
-          },
+          onerror: () => setStatus(ConnectionStatus.ERROR),
           onclose: () => setStatus(ConnectionStatus.DISCONNECTED)
         },
         config: {
           responseModalities: [Modality.AUDIO],
-          systemInstruction: getSystemInstruction(selectedCategory, speechRate, topInterests, recentKeywords, currentUser || undefined),
+          systemInstruction: getSystemInstruction(selectedCategory, speechRate, selectedLanguage, currentUser || undefined),
           outputAudioTranscription: {}, inputAudioTranscription: {},
         }
       });
       sessionRef.current = await sessionPromise;
     } catch (error) { setStatus(ConnectionStatus.ERROR); }
-  }, [status, selectedCategory, speechRate, handleLiveMessage, topInterests, recentKeywords, currentUser]);
+  }, [status, selectedCategory, speechRate, selectedLanguage, handleLiveMessage, currentUser]);
 
   const handleSummarize = async (article: any) => {
     if (summarizingArticleIds.has(article.title)) return;
@@ -249,248 +221,184 @@ const App: React.FC = () => {
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       const response = await ai.models.generateContent({
         model: 'gemini-3-flash-preview',
-        contents: `Headline: "${article.title}". JSON: summary, tags[], sentiment`,
-        config: { responseMimeType: "application/json", responseSchema: { type: Type.OBJECT, properties: { summary: { type: Type.STRING }, tags: { type: Type.ARRAY, items: { type: Type.STRING } }, sentiment: { type: Type.STRING } }, required: ["summary", "tags", "sentiment"] } }
+        contents: `Research this topic and provide a high-fidelity summary in ${selectedLanguage} with the top 3 points: "${article.title}"`,
+        config: { tools: [{ googleSearch: {} }] }
       });
-      const result = JSON.parse(response.text || '{}');
-      setArticleSummaries(prev => ({ ...prev, [article.title]: result.summary }));
-      setArticleTags(prev => ({ ...prev, [article.title]: result.tags }));
-      setArticleSentiments(prev => ({ ...prev, [article.title]: result.sentiment }));
+      setArticleSummaries(prev => ({ ...prev, [article.title]: response.text || "" }));
+      if (response.candidates?.[0]?.groundingMetadata?.groundingChunks) {
+        setArticleGrounding(prev => ({ ...prev, [article.title]: response.candidates![0].groundingMetadata!.groundingChunks! }));
+      }
     } catch (err) { console.error(err); } finally { setSummarizingArticleIds(prev => { const next = new Set(prev); next.delete(article.title); return next; }); }
   };
 
-  const handleGenerateVideo = async (article: any) => {
-    if (articleVideos[article.title]) { setActiveVideo({ url: articleVideos[article.title], title: article.title }); return; }
-    setGeneratingVideoId(article.title);
-    try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-      let operation = await ai.models.generateVideos({
-        model: 'veo-3.1-fast-generate-preview',
-        prompt: `Cinematic news briefing: ${article.title}`,
-        config: { numberOfVideos: 1, resolution: '720p', aspectRatio: '16:9' }
-      });
-      while (!operation.done) { await new Promise(r => setTimeout(r, 10000)); operation = await ai.operations.getVideosOperation({ operation }); }
-      const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
-      if (downloadLink) {
-        const res = await fetch(`${downloadLink}&key=${process.env.API_KEY}`);
-        const url = URL.createObjectURL(await res.blob());
-        setArticleVideos(prev => ({ ...prev, [article.title]: url }));
-        setActiveVideo({ url, title: article.title });
-      }
-    } finally { setGeneratingVideoId(null); }
-  };
-
-  const toggleSaveArticle = (article: any) => {
-    if (!currentUser?.isLoggedIn) {
-      setIsAuthModalOpen(true);
-      return;
-    }
-    setSavedArticles(prev => prev.some(a => a.title === article.title) ? prev.filter(a => a.title !== article.title) : [...prev, article]);
-  };
-
-  const togglePostArticle = (article: any) => {
-    if (!currentUser?.isLoggedIn) {
-      setIsAuthModalOpen(true);
-      return;
-    }
-    setPostedArticles(prev => prev.some(a => a.title === article.title) ? prev.filter(a => a.title !== article.title) : [{ ...article, postedDate: new Date().toISOString(), summary: articleSummaries[article.title], videoUrl: articleVideos[article.title], tags: articleTags[article.title], sentiment: articleSentiments[article.title], dissemination: {} }, ...prev]);
-  };
-
-  const handleDisseminate = (articleTitle: string, platform: keyof DisseminationStatus) => {
-    setPostedArticles(prev => prev.map(a => a.title === articleTitle ? { ...a, dissemination: { ...a.dissemination, [platform]: true } } : a));
-  };
-
-  const handleLogout = () => {
-    setCurrentUser(null);
-    setShowProfileMenu(false);
-  };
-
-  const filteredAndSortedNews = useMemo(() => {
-    if (selectedCategory === 'Feed') return [...postedArticles].sort((a, b) => new Date(b.postedDate).getTime() - new Date(a.postedDate).getTime());
-    let result = [...newsArticles];
-    if (selectedCategory !== 'All' && selectedCategory !== 'Recommended') result = result.filter(news => news.category === selectedCategory);
-    return result.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-  }, [selectedCategory, newsArticles, postedArticles]);
-
   return (
-    <div className="min-h-screen flex flex-col bg-slate-950 text-slate-100 font-sans">
-      <header className="px-6 py-4 border-b border-slate-800 bg-slate-900/50 backdrop-blur-md sticky top-0 z-50 flex justify-between items-center">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-full bg-blue-600 flex items-center justify-center shadow-lg shadow-blue-900/20">
-            <svg className="w-6 h-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+    <div className="min-h-screen flex flex-col bg-slate-950 text-slate-100 font-sans selection:bg-blue-500/30">
+      <header className="px-6 py-4 border-b border-slate-800 bg-slate-900/50 backdrop-blur-md sticky top-0 z-50 flex justify-between items-center shadow-2xl">
+        <div className="flex items-center gap-4">
+          <div className="w-12 h-12 rounded-xl bg-blue-600 flex items-center justify-center shadow-lg shadow-blue-900/40 border border-blue-400/30">
+            <svg className="w-7 h-7 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
             </svg>
           </div>
-          <h1 className="text-xl font-bold tracking-tight">Nova <span className="text-blue-500">Channels</span></h1>
+          <div>
+            <h1 className="text-xl font-black tracking-tighter uppercase italic">Nova <span className="text-blue-500">Channels</span></h1>
+            <p className="text-[10px] font-mono text-blue-400/70 tracking-widest uppercase">Multi-Lingual News Grid</p>
+          </div>
         </div>
         
         <div className="flex items-center gap-4">
+          <div className="relative">
+            <button 
+              onClick={() => setShowLangMenu(!showLangMenu)}
+              className="px-4 py-2 bg-slate-800 border border-slate-700 rounded-full text-xs font-bold text-slate-300 hover:border-blue-500 transition-all flex items-center gap-2"
+            >
+              🌐 {selectedLanguage}
+            </button>
+            {showLangMenu && (
+              <div className="absolute top-full right-0 mt-2 w-48 bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl py-2 z-50 animate-fade-in">
+                {LANGUAGES.map(lang => (
+                  <button 
+                    key={lang} 
+                    onClick={() => { setSelectedLanguage(lang); setShowLangMenu(false); }}
+                    className={`w-full text-left px-4 py-2 text-xs transition-colors ${selectedLanguage === lang ? 'text-blue-400 bg-blue-500/10 font-bold' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}
+                  >
+                    {lang}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
           <button 
             onClick={toggleConnection} 
-            className={`px-6 py-2 rounded-full font-semibold transition-all flex items-center gap-2 ${status === ConnectionStatus.CONNECTED ? 'bg-red-500 hover:bg-red-600' : 'bg-blue-600 hover:bg-blue-700 shadow-lg shadow-blue-900/20'}`}
+            className={`px-6 py-2 rounded-full font-black text-xs uppercase tracking-widest transition-all ${status === ConnectionStatus.CONNECTED ? 'bg-red-500 hover:bg-red-600 shadow-lg shadow-red-900/20' : 'bg-blue-600 hover:bg-blue-700 shadow-lg shadow-blue-900/20'}`}
           >
-            {status === ConnectionStatus.CONNECTED ? 'End Session' : 'Start Session'}
+            {status === ConnectionStatus.CONNECTED ? 'Kill Stream' : 'Go Live'}
           </button>
 
           {currentUser ? (
             <div className="relative">
-              <button 
-                onClick={() => setShowProfileMenu(!showProfileMenu)}
-                className="w-10 h-10 rounded-full border border-slate-700 overflow-hidden hover:border-blue-500 transition-colors bg-slate-800"
-              >
+              <button onClick={() => setShowProfileMenu(!showProfileMenu)} className="w-10 h-10 rounded-xl border border-slate-700 overflow-hidden hover:border-blue-500 bg-slate-800">
                 <img src={currentUser.avatar} alt={currentUser.username} className="w-full h-full object-cover" />
               </button>
-              
               {showProfileMenu && (
-                <div className="absolute top-full right-0 mt-2 w-48 bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl py-2 z-50 animate-fade-in">
-                  <div className="px-4 py-2 border-b border-slate-800 mb-1">
-                    <p className="text-xs font-bold text-white truncate">{currentUser.username}</p>
-                    <p className="text-[10px] text-slate-500 truncate">{currentUser.email}</p>
-                  </div>
-                  <button className="w-full text-left px-4 py-2 text-xs text-slate-400 hover:bg-slate-800 hover:text-white transition-colors">Settings</button>
-                  <button 
-                    onClick={handleLogout}
-                    className="w-full text-left px-4 py-2 text-xs text-red-400 hover:bg-red-500/10 transition-colors"
-                  >
-                    Sign Out
-                  </button>
+                <div className="absolute top-full right-0 mt-2 w-48 bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl py-2 z-50">
+                  <div className="px-4 py-2 border-b border-slate-800 text-[10px] font-bold text-slate-500">{currentUser.username}</div>
+                  <button onClick={() => setCurrentUser(null)} className="w-full text-left px-4 py-2 text-xs text-red-400 hover:bg-red-500/10">Sign Out</button>
                 </div>
               )}
             </div>
           ) : (
-            <button 
-              onClick={() => setIsAuthModalOpen(true)}
-              className="px-6 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-full text-sm font-bold border border-slate-700 transition-all"
-            >
-              Sign In
-            </button>
+            <button onClick={() => setIsAuthModalOpen(true)} className="px-5 py-2 bg-slate-800 border border-slate-700 rounded-full text-xs font-bold">Sign In</button>
           )}
         </div>
       </header>
 
-      <AuthModal 
-        isOpen={isAuthModalOpen}
-        onClose={() => setIsAuthModalOpen(false)}
-        onAuthSuccess={(user) => setCurrentUser(user)}
-      />
-
-      {generatingVideoId && (
-        <div className="fixed inset-0 z-[100] bg-slate-950/90 backdrop-blur-xl flex flex-col items-center justify-center p-6 text-center">
-          <div className="w-24 h-24 mb-8 relative">
-            <div className="absolute inset-0 border-4 border-blue-500/20 rounded-full" />
-            <div className="absolute inset-0 border-4 border-blue-500 border-t-transparent rounded-full animate-spin" />
-          </div>
-          <p className="text-blue-400 font-mono animate-pulse uppercase tracking-widest text-sm">{VIDEO_LOADING_MESSAGES[videoLoadingMessageIdx]}</p>
-        </div>
-      )}
-
-      {activeVideo && (
-        <div className="fixed inset-0 z-[100] bg-slate-950/95 flex items-center justify-center p-4">
-          <div className="max-w-4xl w-full bg-slate-900 rounded-3xl overflow-hidden shadow-2xl border border-slate-800">
-            <div className="px-6 py-4 flex justify-between items-center border-b border-slate-800 bg-slate-900/80">
-              <h3 className="text-sm font-bold text-white truncate max-w-[80%]">{activeVideo.title}</h3>
-              <button onClick={() => setActiveVideo(null)} className="p-1.5 bg-slate-800 rounded-full text-slate-400 hover:text-white transition-colors">
-                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-            <video src={activeVideo.url} controls autoPlay className="w-full aspect-video" />
-          </div>
-        </div>
-      )}
+      <AuthModal isOpen={isAuthModalOpen} onClose={() => setIsAuthModalOpen(false)} onAuthSuccess={(user) => setCurrentUser(user)} />
 
       <main className="flex-1 max-w-6xl mx-auto w-full p-6 space-y-8">
-        <section className="flex flex-wrap gap-2 bg-slate-900/40 p-4 rounded-3xl border border-slate-800/50">
+        <section className="flex flex-wrap gap-2">
           {CATEGORIES.map(cat => (
-            <button 
-              key={cat.id} 
-              onClick={() => {
-                if (cat.id === 'Feed' && !currentUser?.isLoggedIn) {
-                  setIsAuthModalOpen(true);
-                } else {
-                  setSelectedCategory(cat.id);
-                }
-              }} 
-              className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${selectedCategory === cat.id ? `${cat.color} text-white shadow-lg` : 'bg-slate-900 border border-slate-800 text-slate-400 hover:border-slate-700'}`}
-            >
-              <span className="mr-2">{cat.icon}</span>
-              {cat.label}
+            <button key={cat.id} onClick={() => setSelectedCategory(cat.id)} className={`px-5 py-2 rounded-xl text-xs font-bold uppercase tracking-widest transition-all ${selectedCategory === cat.id ? `${cat.color} text-white shadow-lg shadow-blue-900/20` : 'bg-slate-900 border border-slate-800 text-slate-500 hover:border-slate-700'}`}>
+              <span className="mr-2">{cat.icon}</span> {cat.label}
             </button>
           ))}
         </section>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          <div className="lg:col-span-2 flex flex-col gap-6">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 h-[700px]">
+          <div className="lg:col-span-2 flex flex-col gap-6 h-full">
             <div className="bg-slate-900/80 border border-slate-800 rounded-3xl p-6 shadow-xl relative overflow-hidden group">
                <div className="absolute -top-12 -right-12 w-32 h-32 bg-blue-600/5 rounded-full blur-3xl group-hover:bg-blue-600/10 transition-all duration-700" />
-               <AudioVisualizer isActive={isListening} analyzer={analyzerRef.current || undefined} />
+               <AudioVisualizer isActive={isListening} analyzer={undefined} />
+               <div className="mt-4 flex items-center justify-between">
+                 <div className="text-[10px] font-mono text-blue-500/60 uppercase tracking-widest">Signal Integrity: Optimal</div>
+                 <div className="flex gap-2">
+                   <div className={`w-1.5 h-1.5 rounded-full ${isListening ? 'bg-blue-500 animate-pulse' : 'bg-slate-700'}`} />
+                   <div className="w-1.5 h-1.5 rounded-full bg-slate-700" />
+                 </div>
+               </div>
             </div>
-            <div className="flex-1 bg-slate-900/80 border border-slate-800 rounded-3xl p-6 min-h-[400px] overflow-y-auto space-y-4 shadow-xl">
-              {history.length === 0 && !streamingUserText && !streamingModelText && (
-                <div className="h-full flex flex-col items-center justify-center text-slate-700 opacity-40">
-                  <p className="text-xs font-bold uppercase tracking-widest">Frequency Silent</p>
-                </div>
-              )}
+            <div className="flex-1 bg-slate-900/80 border border-slate-800 rounded-3xl p-6 overflow-y-auto space-y-4 shadow-xl scrollbar-hide">
               {history.map((msg, i) => (
                 <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                  <div className={`max-w-[80%] px-5 py-3 rounded-2xl shadow-md ${msg.role === 'user' ? 'bg-blue-600 text-white rounded-tr-none' : 'bg-slate-800 text-slate-100 rounded-tl-none border border-slate-700'}`}>
-                    {msg.text}
+                  <div className={`max-w-[85%] px-5 py-3 rounded-2xl ${msg.role === 'user' ? 'bg-blue-600 text-white rounded-tr-none' : 'bg-slate-800 text-slate-100 rounded-tl-none border border-slate-700'}`}>
+                    <p className="text-sm leading-relaxed">{msg.text}</p>
                   </div>
                 </div>
               ))}
               {streamingModelText && (
                 <div className="flex justify-start">
-                  <div className="max-w-[80%] px-5 py-3 rounded-2xl bg-slate-800 text-slate-100 rounded-tl-none border border-blue-500/30 animate-pulse">
+                  <div className="max-w-[85%] px-5 py-3 rounded-2xl bg-slate-800 text-blue-100 rounded-tl-none border border-blue-500/30 animate-pulse italic">
                     {streamingModelText}
-                  </div>
-                </div>
-              )}
-              {streamingUserText && (
-                <div className="flex justify-end">
-                  <div className="max-w-[80%] px-5 py-3 rounded-2xl bg-blue-600/40 text-blue-100 rounded-tr-none border border-blue-400/20 italic">
-                    {streamingUserText}
                   </div>
                 </div>
               )}
             </div>
           </div>
 
-          <div className="flex flex-col gap-6 overflow-y-auto max-h-[800px] pr-2 scrollbar-hide">
-            <h2 className="text-xs font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2">
-              <span className="w-1.5 h-1.5 bg-blue-500 rounded-full" />
-              {selectedCategory === 'Feed' ? 'Broadcasting Console' : 'Information Stream'}
+          <div className="flex flex-col gap-6 overflow-y-auto pr-2 scrollbar-hide">
+            <h2 className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] flex items-center gap-3">
+              <span className="w-8 h-px bg-slate-800" /> 
+              {selectedCategory === 'SocialMedia' ? 'Official Channels' : 'Grounded Intelligence'} 
+              <span className="w-full h-px bg-slate-800" />
             </h2>
-            {filteredAndSortedNews.map((news, idx) => (
-              <NewsCard 
-                key={news.title + idx} 
-                {...news}
-                summary={articleSummaries[news.title] || (news as any).summary}
-                tags={articleTags[news.title] || (news as any).tags}
-                sentiment={articleSentiments[news.title] || (news as any).sentiment}
-                videoUrl={articleVideos[news.title] || (news as any).videoUrl}
-                isSaved={savedArticles.some(a => a.title === news.title)}
-                isPosted={postedArticles.some(a => a.title === news.title)}
-                isGeneratingVideo={generatingVideoId === news.title}
-                isSummarizing={summarizingArticleIds.has(news.title)}
-                onToggleSave={() => toggleSaveArticle(news)}
-                onPost={() => togglePostArticle(news)}
-                onDisseminate={(p) => handleDisseminate(news.title, p)}
-                onGenerateVideo={() => handleGenerateVideo(news)}
-                onSummarize={() => handleSummarize(news)}
-                onPlayVideo={(url) => setActiveVideo({ url, title: news.title })}
-              />
-            ))}
-            {filteredAndSortedNews.length === 0 && (
-              <div className="text-center py-12 bg-slate-900/50 rounded-2xl border border-slate-800 border-dashed">
-                <p className="text-xs text-slate-600 italic">No content found in this channel.</p>
+            
+            {selectedCategory === 'SocialMedia' ? (
+              <div className="space-y-4">
+                {SOCIAL_CHANNELS.map((channel) => (
+                  <div key={channel.id} className={`group relative rounded-2xl p-5 bg-gradient-to-br ${channel.color} border border-white/10 shadow-xl overflow-hidden`}>
+                    <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:scale-110 transition-transform">
+                      {channel.icon}
+                    </div>
+                    <div className="relative z-10 space-y-3">
+                      <div className="flex items-center gap-2">
+                        <div className="p-2 bg-white/10 rounded-lg">
+                          {channel.icon}
+                        </div>
+                        <div>
+                          <h3 className="text-xs font-black uppercase tracking-widest text-white">{channel.name}</h3>
+                          <p className="text-[8px] font-mono text-white/60 uppercase">{channel.platform}</p>
+                        </div>
+                      </div>
+                      <p className="text-[10px] text-white/80 leading-relaxed font-medium">
+                        {channel.description}
+                      </p>
+                      <a 
+                        href={channel.link} 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-2 px-4 py-2 bg-white/10 hover:bg-white/20 backdrop-blur-md border border-white/20 rounded-xl text-[9px] font-black uppercase tracking-widest text-white transition-all transform active:scale-95"
+                      >
+                        Join {channel.platform}
+                        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
+                        </svg>
+                      </a>
+                    </div>
+                    {/* Visual Pulse for "Live" effect */}
+                    <div className="absolute bottom-4 right-4 flex items-center gap-1.5">
+                      <div className="w-1.5 h-1.5 bg-green-400 rounded-full animate-ping" />
+                      <span className="text-[8px] font-mono font-bold text-white/40 uppercase tracking-tighter">Connected</span>
+                    </div>
+                  </div>
+                ))}
               </div>
+            ) : (
+              newsArticles.map((news, idx) => (
+                <NewsCard 
+                  key={news.title + idx} 
+                  {...news}
+                  summary={articleSummaries[news.title]}
+                  isSummarizing={summarizingArticleIds.has(news.title)}
+                  onSummarize={() => handleSummarize(news)}
+                />
+              ))
             )}
           </div>
         </div>
       </main>
-      <footer className="px-6 py-4 border-t border-slate-800/50 bg-slate-950 text-center text-[10px] text-slate-600 uppercase tracking-widest font-bold">
-        Nova AI Networks Omnichannel Broadcast Agent © 2025
+      <footer className="px-6 py-4 border-t border-slate-800/50 bg-slate-950/80 text-center text-[9px] text-slate-600 uppercase tracking-[0.4em] font-black">
+        Nova AI Networks // Multilingual Broadcast Node 001-ALPHA
       </footer>
     </div>
   );
